@@ -1,6 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
-using LMHull.Rhino.Features.Hydrostatics.UI.Panels;
+using LMHull.Rhino.Infrastructure;
 using Rhino.PlugIns;
 
 // 1. Khai báo các thuộc tính ở cấp độ Assembly tại đầu file
@@ -26,8 +26,10 @@ public class LMHullPlugin : PlugIn
 
     protected override LoadReturnCode OnLoad(ref string errorMessage)
     {
-        // Đăng ký Panel với Rhino Panels System
-        global::Rhino.UI.Panels.RegisterPanel(this, typeof(LMHullMainPanel), "LMHull Marine", (System.Drawing.Icon?)null);
+        ServiceRegistry.Initialize();
+
+        // Một panel chung "LMHull" gom tab Lệnh, Thủy tĩnh, Kết cấu và Kết quả (mở bằng lệnh LMHull)
+        global::Rhino.UI.Panels.RegisterPanel(this, typeof(UI.LMHullWorkspacePanel), "LMHull", (System.Drawing.Icon?)null);
         return LoadReturnCode.Success;
     }
 }

@@ -1,23 +1,21 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
     <TargetExt>.rhp</TargetExt>
     <AssemblyName>LMHull.Rhino</AssemblyName>
     <RootNamespace>LMHull.Rhino</RootNamespace>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <NoWarn>$(NoWarn);NU1701</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Khai báo một lần duy nhất cho mỗi gói -->
     <PackageReference Include="RhinoCommon" Version="8.0.23304.9001" IncludeAssets="compile;build" ExcludeAssets="runtime" />
-    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" IncludeAssets="compile" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\LMHull.Core\LMHull.Core.csproj" />
+    <ProjectReference Include="..\LMHull.Infrastructure\LMHull.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

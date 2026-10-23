@@ -1,12 +1,11 @@
 using System;
-using System.Drawing;
 using System.Linq;
 using LMHull.Core.Models;
 using LMHull.Rhino.Common;
 using LMHull.Rhino.Features.HullGeneration.Builders;
+using LMHull.Rhino.Infrastructure.Cad;
 using Rhino;
 using Rhino.Commands;
-using Rhino.DocObjects;
 using Rhino.Geometry;
 
 namespace LMHull.Rhino.Features.HullGeneration.Commands;
@@ -17,13 +16,15 @@ public class LMCloseHullCommand : Command
 
     protected override Result RunCommand(RhinoDoc doc, RunMode mode)
     {
+        var cad = RhinoCadHandle.For(doc);
+
         // 1. Kiểm tra xem đã có vỏ tàu được tạo từ các bài trước chưa
         Guid lastGuid = LMHullPlugin.Instance.LastHullGuid;
-        RhinoObject? hullObj = doc.Objects.FindId(lastGuid);
+        Brep? existingHull = cad.GetGeometry<Brep>(lastGuid);
 
         Brep? openHullBrep = null;
 
-        if (hullObj != null && hullObj.Geometry is Brep b)
+        if (existingHull is Brep b)
         {
             openHullBrep = b;
             RhinoApp.WriteLine($"[LMCloseHull] Đang xử lý vỏ tàu có sẵn (Guid: {lastGuid})...");
@@ -45,7 +46,7 @@ public class LMCloseHullCommand : Command
         var ship = new ShipInput("Vỏ tàu đóng kín v0.7", length: 50.0, beam: 10.0, draft: 2.5, depth: 4.0);
 
         // 2. TIẾN HÀNH ĐÓNG KÍN VỎ TÀU (SolidHullStitcher)
-        var (closedBrep, nakedCount) = SolidHullStitcher.CreateSolidHull(openHullBrep, ship, doc.ModelAbsoluteTolerance);
+        var (closedBrep, nakedCount) = SolidHullStitcher.CreateSolidHull(openHullBrep, ship, cad.Tolerance);
 
         if (closedBrep == null)
         {
@@ -54,26 +55,19 @@ public class LMCloseHullCommand : Command
         }
 
         // 3. THAY THẾ ĐỐI TƯỢNG CŨ HOẶC THÊM MỚI VÀO BẢN VẼ
-        LayerManager.EnsureStandardLayers(doc);
-        int hullLayerIndex = LayerManager.GetOrCreateLayer(doc, LayerManager.HullLayerName, Color.FromArgb(200, 40, 40));
+        LayerManager.EnsureStandardLayers(cad);
 
-        var attr = new ObjectAttributes
+        if (existingHull != null)
         {
-            LayerIndex = hullLayerIndex,
-            Name = "Vỏ tàu kín (Solid Brep)"
-        };
-
-        if (hullObj != null)
-        {
-            doc.Objects.Replace(lastGuid, closedBrep);
+            cad.Replace(lastGuid, closedBrep);
         }
         else
         {
-            Guid newGuid = doc.Objects.AddBrep(closedBrep, attr);
+            Guid newGuid = cad.AddBrep(closedBrep, LayerManager.Hull.Spec("Vỏ tàu kín (Solid Brep)"));
             LMHullPlugin.Instance.LastHullGuid = newGuid;
         }
 
-        doc.Views.Redraw();
+        cad.Redraw();
 
         // 4. THỐNG KÊ CẤU TRÚC TOPO CỦA BREP
         RhinoApp.WriteLine("==================================================");

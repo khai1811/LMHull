@@ -1,12 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using LMHull.Core.Models;
 using LMHull.Rhino.Common;
 using LMHull.Rhino.Features.HullGeneration.Builders;
+using LMHull.Rhino.Infrastructure.Cad;
 using Rhino;
 using Rhino.Commands;
-using Rhino.DocObjects;
 using Rhino.Geometry;
 
 namespace LMHull.Rhino.Features.HullGeneration.Commands;
@@ -21,20 +20,14 @@ public class LMCreateNurbsHullCommand : Command
         var ship = new ShipInput("Vỏ tàu NURBS v0.6", length: 50.0, beam: 10.0, draft: 2.5, depth: 4.0);
 
         // 2. Đảm bảo Layer tiêu chuẩn tồn tại
-        LayerManager.EnsureStandardLayers(doc);
-        int hullLayerIndex = LayerManager.GetOrCreateLayer(doc, LayerManager.HullLayerName, Color.FromArgb(200, 40, 40));
-        int refLayerIndex = LayerManager.GetOrCreateLayer(doc, LayerManager.ReferenceLayerName, Color.FromArgb(0, 120, 215));
+        var cad = RhinoCadHandle.For(doc);
+        LayerManager.EnsureStandardLayers(cad);
 
         // 3. DỰNG CÁC ĐƯỜNG SƯỜN NURBS (NurbsCurvesBuilder)
         List<Curve> stationCurves = NurbsCurvesBuilder.BuildStationCurves(ship, numberOfStations: 7);
         for (int i = 0; i < stationCurves.Count; i++)
         {
-            var attr = new ObjectAttributes
-            {
-                LayerIndex = refLayerIndex,
-                Name = $"StationCurve_{i}"
-            };
-            doc.Objects.AddCurve(stationCurves[i], attr);
+            cad.AddCurve(stationCurves[i], LayerManager.Reference.Spec($"StationCurve_{i}"));
         }
 
         // 4. LOFT CÁC ĐƯỜNG SƯỜN THÀNH MẶT VỎ TÀU NURBS (NurbsHullLofter)
@@ -45,13 +38,8 @@ public class LMCreateNurbsHullCommand : Command
             return Result.Failure;
         }
 
-        // 5. ĐƯA MẶT VỎ VÀO DOC.OBJECTS TRONG LAYER "HULL"
-        var hullAttr = new ObjectAttributes
-        {
-            LayerIndex = hullLayerIndex,
-            Name = ship.Name
-        };
-        Guid hullGuid = doc.Objects.AddBrep(hullBrep, hullAttr);
+        // 5. ĐƯA MẶT VỎ VÀO TÀI LIỆU TRONG LAYER "HULL"
+        Guid hullGuid = cad.AddBrep(hullBrep, LayerManager.Hull.Spec(ship.Name));
         if (hullGuid == Guid.Empty)
         {
             RhinoApp.WriteLine("[Lỗi]: Không thể lưu mặt vỏ vào tài liệu Rhino.");
@@ -62,7 +50,7 @@ public class LMCreateNurbsHullCommand : Command
         LMHullPlugin.Instance.LastHullGuid = hullGuid;
 
         // 6. LÀM MỚI KHUNG NHÌN
-        doc.Views.Redraw();
+        cad.Redraw();
 
         // 7. TRÍCH XUẤT VÀ IN THÔNG SỐ TOÁN HỌC CỦA MẶT NURBS
         // Lấy mặt NURBS đầu tiên của vỏ tàu

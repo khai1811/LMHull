@@ -1,28 +1,19 @@
-using LMHull.Rhino.Features.Hydrostatics.UI.Panels;
+using LMHull.Rhino.UI;
 using Rhino;
 using Rhino.Commands;
-using Rhino.UI;
 
 namespace LMHull.Rhino.Features.Hydrostatics.Commands;
 
+/// <summary>
+/// Giữ lại để tương thích: mở panel chung LMHull ở tab Thủy tĩnh.
+/// </summary>
 public class LMShowPanelCommand : Command
 {
     public override string EnglishName => "LMShowPanel";
 
     protected override Result RunCommand(RhinoDoc doc, RunMode mode)
     {
-        Guid panelId = LMHullMainPanel.PanelId;
-        bool isVisible = Panels.IsPanelVisible(panelId);
-
-        if (!isVisible)
-        {
-            Panels.OpenPanel(panelId);
-        }
-        else
-        {
-            Panels.ClosePanel(panelId);
-        }
-
+        LMHullWorkspacePanel.Show(WorkspaceTab.Hydrostatics);
         return Result.Success;
     }
 }

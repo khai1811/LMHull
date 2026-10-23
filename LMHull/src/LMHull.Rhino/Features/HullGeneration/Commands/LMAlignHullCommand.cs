@@ -1,5 +1,6 @@
 using System;
 using LMHull.Rhino.Common;
+using LMHull.Rhino.Infrastructure.Cad;
 using Rhino;
 using Rhino.Commands;
 using Rhino.DocObjects;
@@ -16,21 +17,8 @@ public class LMAlignHullCommand : Command
     protected override Result RunCommand(RhinoDoc doc, RunMode mode)
     {
         // 1. Cho phép người dùng chọn vỏ tàu cần đưa về hệ tọa độ chuẩn
-        var getObj = new GetObject();
-        getObj.SetCommandPrompt("Chọn vỏ tàu (Brep) cần chuẩn hóa hệ tọa độ");
-        getObj.GeometryFilter = ObjectType.Brep | ObjectType.PolysrfFilter;
-        getObj.Get();
-
-        if (getObj.CommandResult() != Result.Success)
-            return getObj.CommandResult();
-
-        ObjRef objRef = getObj.Object(0);
-        var brep = objRef.Brep();
-        if (brep == null)
-        {
-            RhinoApp.WriteLine("[Lỗi]: Đối tượng chọn không phải là Brep hợp lệ.");
-            return Result.Failure;
-        }
+        var picked = RhinoInput.PickBrep("Chọn vỏ tàu (Brep) cần chuẩn hóa hệ tọa độ", out Brep brep, out ObjRef objRef);
+        if (picked != Result.Success) return picked;
 
         // 2. Tính toán ma trận biến đổi tịnh tiến về chuẩn AP, Baseline, Centerline
         Transform xform = ShipCoordinateTransformer.CreateAlignmentTransform(brep);
@@ -39,11 +27,12 @@ public class LMAlignHullCommand : Command
         BoundingBox oldBox = brep.GetBoundingBox(true);
 
         // 3. Áp dụng biến đổi trực tiếp lên đối tượng trong tài liệu
-        doc.Objects.Transform(objRef, xform, true);
-        doc.Views.Redraw();
+        var cad = RhinoCadHandle.For(doc);
+        cad.Transform(objRef.ObjectId, xform);
+        cad.Redraw();
 
         // Lấy tọa độ hộp bao mới
-        BoundingBox newBox = doc.Objects.FindId(objRef.ObjectId)!.Geometry.GetBoundingBox(true);
+        BoundingBox newBox = cad.GetGeometry<GeometryBase>(objRef.ObjectId)!.GetBoundingBox(true);
 
         RhinoApp.WriteLine("==================================================");
         RhinoApp.WriteLine(" [LMAlignHull] ĐÃ CHUẨN HÓA HỆ TỌA ĐỘ VỎ TÀU:");

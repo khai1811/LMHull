@@ -1,11 +1,15 @@
 using System;
+using LMHull.Core.Calculation;
+using LMHull.Core.Reporting;
 using LMHull.Rhino.Common;
+using LMHull.Rhino.Features.Hydrostatics.Calculations;
+using LMHull.Rhino.Features.Hydrostatics.Models;
+using LMHull.Rhino.Features.Reports.Services;
+using LMHull.Rhino.Infrastructure;
 using Rhino;
 using Rhino.Commands;
 using Rhino.DocObjects;
 using Rhino.Geometry;
-using Rhino.Input;
-using Rhino.Input.Custom;
 
 namespace LMHull.Rhino.Features.Hydrostatics.Commands;
 
@@ -17,31 +21,10 @@ public class LMHydroCommand : Command
     protected override Result RunCommand(RhinoDoc doc, RunMode mode)
     {
         // ---------------------------------------------------------------------
-        // BƯỚC 1: NGƯỜI DÙNG CHỌN VỎ TÀU (GetObject)
+        // BƯỚC 1: NGƯỜI DÙNG CHỌN VỎ TÀU
         // ---------------------------------------------------------------------
-        var getHull = new GetObject();
-        getHull.SetCommandPrompt("Chọn vỏ tàu cần tính toán thủy tĩnh (Brep / Polysurface)");
-
-        // Đặt bộ lọc chỉ cho phép chọn Brep hoặc Polysurface (loại bỏ Point, Curve, Mesh)
-        getHull.GeometryFilter = ObjectType.Brep | ObjectType.PolysrfFilter;
-        getHull.SubObjectSelect = false; // Không cho chọn mặt lẻ
-        getHull.Get();
-
-        // Xử lý nếu người dùng bấm Esc hoặc hủy chọn
-        if (getHull.CommandResult() != Result.Success)
-        {
-            return getHull.CommandResult();
-        }
-
-        // Trích xuất hình học từ ObjRef -> Brep
-        ObjRef objRef = getHull.Object(0);
-        Brep? hullBrep = objRef.Brep();
-
-        if (hullBrep == null)
-        {
-            RhinoApp.WriteLine("[Lỗi]: Đối tượng được chọn không thể đọc cấu trúc Brep.");
-            return Result.Failure;
-        }
+        var picked = RhinoInput.PickBrep("Chọn vỏ tàu cần tính toán thủy tĩnh (Brep / Polysurface)", out Brep hullBrep, out ObjRef objRef);
+        if (picked != Result.Success) return picked;
 
         // Lấy thông số bao hình học của tàu được chọn
         BoundingBox bbox = hullBrep.GetBoundingBox(true);
@@ -52,91 +35,55 @@ public class LMHydroCommand : Command
         RhinoApp.WriteLine($"[LMHydro] Đã chọn: {objRef.Object().Name ?? "Vỏ tàu"} | Kích thước bao: L={totalLength:F2}m, B={totalBeam:F2}m, D={totalDepth:F2}m");
 
         // ---------------------------------------------------------------------
-        // BƯỚC 2: NGƯỜI DÙNG NHẬP CHIỀU CHÌM / MỚN NƯỚC T (GetNumber)
+        // BƯỚC 2: NGƯỜI DÙNG NHẬP CHIỀU CHÌM / MỚN NƯỚC T
         // ---------------------------------------------------------------------
-        var getDraft = new GetNumber();
-        getDraft.SetCommandPrompt("Nhập chiều chìm thiết kế T (mớn nước)");
-
-        // Đặt giá trị mặc định bằng 60% chiều cao mạn và giới hạn an toàn
+        // Mặc định bằng 60% chiều cao mạn và giới hạn trong chiều cao mạn
         double defaultDraft = Math.Round(totalDepth * 0.6, 2);
-        getDraft.SetDefaultNumber(defaultDraft);
-        getDraft.SetLowerLimit(0.1, false);
-        getDraft.SetUpperLimit(totalDepth, true);
-
-        getDraft.Get();
-
-        // Xử lý nếu bấm Esc
-        if (getDraft.CommandResult() != Result.Success)
-        {
-            return getDraft.CommandResult();
-        }
-
-        double draft = getDraft.Number();
+        var gotDraft = RhinoInput.GetNumber("Nhập chiều chìm thiết kế T (mớn nước)", defaultDraft, 0.1, totalDepth, out double draft);
+        if (gotDraft != Result.Success) return gotDraft;
 
         // ---------------------------------------------------------------------
-        // BƯỚC 3: TÍNH THỂ TÍCH KHỐI VỎ VÀ CẮT LẤY PHẦN CHÌM
+        // BƯỚC 3: TÍNH THỦY TĨNH (dùng chung HydrostaticCalculation với panel)
         // ---------------------------------------------------------------------
-        // 1. Tính thể tích toàn bộ khối nếu là Brep kín
         double totalVolume = 0.0;
         if (hullBrep.IsSolid)
         {
-            var massProps = VolumeMassProperties.Compute(hullBrep);
-            if (massProps != null) totalVolume = massProps.Volume;
+            totalVolume = VolumeMassProperties.Compute(hullBrep)?.Volume ?? 0.0;
         }
 
-        // 2. Cắt lấy phần chìm dưới mặt nước: Mặt phẳng đường nước tại Z = bbox.Min.Z + draft
+        var input = new HydrostaticInput(hullBrep, draft, ServiceRegistry.Settings.SeaWaterDensity, doc.ModelAbsoluteTolerance);
+        CalculationResult<DetailedHydroResult> result;
+        using (var progress = new RhinoProgressReporter("Thủy tĩnh"))
+        {
+            result = new HydrostaticCalculation().Run(input, progress);
+        }
+        if (!result.IsSuccess || result.Value == null)
+        {
+            ServiceRegistry.Logger.Error("[LMHydro] " + result.GetErrorMessage());
+            return Result.Failure;
+        }
+
+        DetailedHydroResult hydro = result.Value;
         double waterLevelZ = bbox.Min.Z + draft;
-        var waterPlane = new Plane(new Point3d(0, 0, waterLevelZ), Vector3d.ZAxis);
-
-        // Cắt vỏ tàu bằng mặt phẳng nước (Brep.Trim)
-        Brep[] trimmedParts = hullBrep.Trim(waterPlane, doc.ModelAbsoluteTolerance);
-
-        double submergedVolumeApprox = 0.0;
-
-        // Nếu cắt thành công, tìm phần nằm bên dưới Z
-        if (trimmedParts != null && trimmedParts.Length > 0)
-        {
-            foreach (var part in trimmedParts)
-            {
-                BoundingBox partBox = part.GetBoundingBox(true);
-                if (partBox.Max.Z <= waterLevelZ + doc.ModelAbsoluteTolerance)
-                {
-                    // Đóng nắp mặt cắt nước phẳng
-                    Brep cappedSubmerged = part.CapPlanarHoles(doc.ModelAbsoluteTolerance) ?? part;
-                    var subMass = VolumeMassProperties.Compute(cappedSubmerged);
-                    if (subMass != null)
-                    {
-                        submergedVolumeApprox = subMass.Volume;
-                    }
-                    break;
-                }
-            }
-        }
-
-        // Nếu vỏ chưa kín hoàn toàn, ước tính nhanh theo thể tích hộp bao của phần chìm
-        if (submergedVolumeApprox <= 0.0)
-        {
-            submergedVolumeApprox = totalLength * totalBeam * draft * 0.70; // Giả định hệ số béo Cb ~ 0.7
-        }
-
-        // Tính lượng chiếm nước với nước biển (tỷ trọng 1.025 T/m3)
-        double displacement = submergedVolumeApprox * 1.025;
 
         // ---------------------------------------------------------------------
-        // BƯỚC 4: IN KẾT QUẢ TÍNH TOÁN RA DÒNG LỆNH RHINO
+        // BƯỚC 4: XUẤT KẾT QUẢ VÀO BẢNG "LMHull Results"
         // ---------------------------------------------------------------------
-        RhinoApp.WriteLine("==================================================");
-        RhinoApp.WriteLine(" [LMHydro] KẾT QUẢ TÍNH TOÁN TƯƠNG TÁC:");
-        RhinoApp.WriteLine($" - Trạng thái vỏ tàu : {(hullBrep.IsSolid ? "SOLID (Kín)" : "OPEN (Chưa kín hoàn toàn)")}");
-        RhinoApp.WriteLine($" - Chiều chìm đã nhập: T = {draft:F2} m (Mức nước Z = {waterLevelZ:F2} m)");
-        if (totalVolume > 0)
-        {
-            RhinoApp.WriteLine($" - Thể tích toàn bộ  : V_total = {totalVolume:F2} m3");
-        }
-        RhinoApp.WriteLine($" - Thể tích phần chìm: V_sub    = {submergedVolumeApprox:F2} m3");
-        RhinoApp.WriteLine($" - Lượng chiếm nước  : Δ        = {displacement:F2} Tấn (Nước biển)");
-        RhinoApp.WriteLine($" - Tỷ số kích thước  : L/B = {(totalLength / totalBeam):F2} | B/T = {(totalBeam / draft):F2}");
-        RhinoApp.WriteLine("==================================================");
+        string hullName = objRef.Object().Name;
+        var table = ResultTable.KeyValue($"Thủy tĩnh – {(string.IsNullOrWhiteSpace(hullName) ? "Vỏ tàu" : hullName)}", "LMHydro")
+            .AddRow("Trạng thái vỏ tàu", hullBrep.IsSolid ? "SOLID (Kín)" : "OPEN (Chưa kín)", "")
+            .AddRow("Chiều chìm T", draft, "F2", "m")
+            .AddRow("Cao độ mặt nước Z", waterLevelZ, "F2", "m");
+        if (totalVolume > 0) table.AddRow("Thể tích toàn bộ V", totalVolume, "F2", "m³");
+        table.AddRow("Thể tích phần chìm V", hydro.SubmergedVolume, "F2", "m³")
+            .AddRow("Lượng chiếm nước Δ (nước biển)", hydro.Displacement, "F2", "t")
+            .AddRow("Diện tích đường nước Aw", hydro.WaterplaneArea, "F2", "m²")
+            .AddRow("Hệ số béo Cb", hydro.BlockCoefficient, "F3")
+            .AddRow("Cao độ tâm nổi KB", hydro.CenterOfBuoyancy.Z - bbox.Min.Z, "F2", "m")
+            .AddRow("Tỷ số L/B", totalLength / totalBeam, "F2")
+            .AddRow("Tỷ số B/T", totalBeam / draft, "F2");
+        table.Notes.Add($"Kích thước bao: L = {totalLength:F2} m, B = {totalBeam:F2} m, D = {totalDepth:F2} m");
+        ResultsHub.Publish(table);
 
         return Result.Success;
     }

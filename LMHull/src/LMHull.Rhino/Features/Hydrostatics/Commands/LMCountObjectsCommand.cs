@@ -1,4 +1,4 @@
-using System.Linq;
+using LMHull.Rhino.Infrastructure.Cad;
 using Rhino;
 using Rhino.Commands;
 using Rhino.DocObjects;
@@ -12,15 +12,14 @@ public class LMCountObjectsCommand : Command
 
     protected override Result RunCommand(RhinoDoc doc, RunMode mode)
     {
-        // Lấy tất cả đối tượng đang có trong tài liệu doc.Objects
-        var allObjects = doc.Objects.GetObjectList(ObjectType.AnyObject).ToList();
+        var cad = RhinoCadHandle.For(doc);
 
-        RhinoApp.WriteLine($"--- [LMCountObjects] Thống kê bản vẽ '{doc.Name ?? "Chưa đặt tên"}' ---");
-        RhinoApp.WriteLine($" - Số lượng Layer trong doc.Layers   : {doc.Layers.Count}");
-        RhinoApp.WriteLine($" - Tổng số đối tượng trong doc.Objects: {allObjects.Count}");
-        RhinoApp.WriteLine($"   + Khối / Mặt (Brep/Extrusion)     : {allObjects.Count(o => o.ObjectType == ObjectType.Brep || o.ObjectType == ObjectType.Extrusion)}");
-        RhinoApp.WriteLine($"   + Đường cong (Curve)              : {allObjects.Count(o => o.ObjectType == ObjectType.Curve)}");
-        RhinoApp.WriteLine($"   + Điểm (Point)                    : {allObjects.Count(o => o.ObjectType == ObjectType.Point)}");
+        RhinoApp.WriteLine($"--- [LMCountObjects] Thống kê bản vẽ '{(string.IsNullOrEmpty(cad.DocumentName) ? "Chưa đặt tên" : cad.DocumentName)}' ---");
+        RhinoApp.WriteLine($" - Số lượng Layer                   : {cad.LayerCount}");
+        RhinoApp.WriteLine($" - Tổng số đối tượng                : {cad.ObjectCount}");
+        RhinoApp.WriteLine($"   + Khối / Mặt (Brep/Extrusion)     : {cad.CountObjects(ObjectType.Brep | ObjectType.Extrusion)}");
+        RhinoApp.WriteLine($"   + Đường cong (Curve)              : {cad.CountObjects(ObjectType.Curve)}");
+        RhinoApp.WriteLine($"   + Điểm (Point)                    : {cad.CountObjects(ObjectType.Point)}");
 
         return Result.Success;
     }

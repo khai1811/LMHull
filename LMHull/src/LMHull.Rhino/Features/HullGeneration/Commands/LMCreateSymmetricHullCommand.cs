@@ -1,11 +1,10 @@
 using System;
-using System.Drawing;
 using LMHull.Core.Models;
 using LMHull.Rhino.Common;
 using LMHull.Rhino.Features.HullGeneration.Builders;
+using LMHull.Rhino.Infrastructure.Cad;
 using Rhino;
 using Rhino.Commands;
-using Rhino.DocObjects;
 using Rhino.Geometry;
 
 namespace LMHull.Rhino.Features.HullGeneration.Commands;
@@ -27,19 +26,13 @@ public class LMCreateSymmetricHullCommand : Command
             return Result.Failure;
         }
 
-        LayerManager.EnsureStandardLayers(doc);
-        int hullLayerIndex = LayerManager.GetOrCreateLayer(doc, LayerManager.HullLayerName, Color.FromArgb(200, 40, 40));
+        var cad = RhinoCadHandle.For(doc);
+        LayerManager.EnsureStandardLayers(cad);
 
-        var attr = new ObjectAttributes
-        {
-            LayerIndex = hullLayerIndex,
-            Name = ship.Name
-        };
-
-        Guid hullGuid = doc.Objects.AddBrep(solidHull, attr);
+        Guid hullGuid = cad.AddBrep(solidHull, LayerManager.Hull.Spec(ship.Name));
         LMHullPlugin.Instance.LastHullGuid = hullGuid;
 
-        doc.Views.Redraw();
+        cad.Redraw();
 
         BoundingBox bbox = solidHull.GetBoundingBox(true);
         RhinoApp.WriteLine("==================================================");

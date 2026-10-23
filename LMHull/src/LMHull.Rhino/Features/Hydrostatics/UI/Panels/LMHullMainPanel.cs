@@ -1,7 +1,7 @@
 using System;
-using System.Runtime.InteropServices;
 using Eto.Drawing;
 using Eto.Forms;
+using LMHull.Core.Abstractions;
 using LMHull.Core.Enums;
 using LMHull.Core.Models;
 using LMHull.Core.Services;
@@ -9,28 +9,28 @@ using LMHull.Rhino.Common;
 using LMHull.Rhino.Features.HullGeneration.Builders;
 using LMHull.Rhino.Features.Hydrostatics.Services;
 using LMHull.Rhino.Features.Hydrostatics.UI.Conduits;
+using LMHull.Rhino.Infrastructure;
+using LMHull.Rhino.Infrastructure.Cad;
+using LMHull.Rhino.UI.Common;
 using Rhino;
-using Rhino.DocObjects;
 using Rhino.Geometry;
 
 namespace LMHull.Rhino.Features.Hydrostatics.UI.Panels;
 
-[Guid("E8C4307C-8A9F-4D2A-B9F2-C5E37F9281C3")]
 public class LMHullMainPanel : Panel
 {
-    public static Guid PanelId => typeof(LMHullMainPanel).GUID;
+    private readonly ShipDimensionsInput _dims;
 
-    private readonly NumericStepper _numLength;
-    private readonly NumericStepper _numBeam;
-    private readonly NumericStepper _numDraft;
-    private readonly NumericStepper _numDepth;
-
-    private readonly Label _lblDisplacement;
-    private readonly Label _lblVolume;
-    private readonly Label _lblAw;
-    private readonly Label _lblCb;
-    private readonly Label _lblKB;
+    private readonly ResultDisplayRow _rowDisplacement;
+    private readonly ResultDisplayRow _rowVolume;
+    private readonly ResultDisplayRow _rowAw;
+    private readonly ResultDisplayRow _rowCb;
+    private readonly ResultDisplayRow _rowKB;
     private readonly CheckBox _chkShowWaterplane;
+
+    private readonly RangeLimitInput _limitX;
+    private readonly RangeLimitInput _limitY;
+    private readonly RangeLimitInput _limitZ;
 
     private readonly WaterplaneConduit _conduit = new();
 
@@ -38,23 +38,26 @@ public class LMHullMainPanel : Panel
     {
         Padding = new Padding(8);
 
-        _numLength = new NumericStepper { Value = 50.0, MinValue = 5.0, MaxValue = 300.0, DecimalPlaces = 2, Increment = 1.0 };
-        _numBeam = new NumericStepper { Value = 10.0, MinValue = 2.0, MaxValue = 60.0, DecimalPlaces = 2, Increment = 0.5 };
-        _numDraft = new NumericStepper { Value = 2.5, MinValue = 0.2, MaxValue = 20.0, DecimalPlaces = 2, Increment = 0.1 };
-        _numDepth = new NumericStepper { Value = 4.0, MinValue = 1.0, MaxValue = 30.0, DecimalPlaces = 2, Increment = 0.2 };
+        _dims = new ShipDimensionsInput(length: 50.0, beam: 10.0, draft: 2.5, depth: 4.0, minDraft: 0.2);
 
-        var boldFont = new Eto.Drawing.Font(Eto.Drawing.SystemFont.Bold);
+        _rowVolume = new ResultDisplayRow("V chìm thực:", "m³");
+        _rowDisplacement = new ResultDisplayRow("Lượng chiếm nước:", "t");
+        _rowAw = new ResultDisplayRow("Diện tích Aw:", "m²");
+        _rowCb = new ResultDisplayRow("Hệ số béo Cb:");
+        _rowKB = new ResultDisplayRow("Cao độ tâm nổi KB:", "m");
 
-        _lblDisplacement = new Label { Text = "---", Font = boldFont, TextAlignment = TextAlignment.Right };
-        _lblVolume = new Label { Text = "---", Font = boldFont, TextAlignment = TextAlignment.Right };
-        _lblAw = new Label { Text = "---", Font = boldFont, TextAlignment = TextAlignment.Right };
-        _lblCb = new Label { Text = "---", Font = boldFont, TextAlignment = TextAlignment.Right };
-        _lblKB = new Label { Text = "---", Font = boldFont, TextAlignment = TextAlignment.Right };
+        // Giới hạn vùng tính (áp dụng cho LMStructureWeight, LMCreateCompartments)
+        var limits = ServiceRegistry.Settings.Limits;
+        _limitX = CreateLimitInput("X (dọc)", limits.X);
+        _limitY = CreateLimitInput("Y (ngang)", limits.Y);
+        _limitZ = CreateLimitInput("Z (đứng)", limits.Z);
+        var btnSaveLimits = new Button { Text = "Lưu giới hạn" };
+        btnSaveLimits.Click += (s, e) => SaveLimits();
 
         _chkShowWaterplane = new CheckBox { Text = "Hiện mặt nước động (Conduit)", Checked = true };
         _chkShowWaterplane.CheckedChanged += (s, e) => ToggleConduit();
 
-        _numDraft.ValueChanged += (s, e) => UpdateWaterplaneAndCompute();
+        _dims.ValueChanged += (s, e) => UpdateWaterplaneAndCompute();
 
         var btnCalculate = new Button { Text = "Tính toán chi tiết" };
         btnCalculate.Click += (s, e) => ComputeRealHydrostatics();
@@ -80,19 +83,16 @@ public class LMHullMainPanel : Panel
 
         var layout = new DynamicLayout { Spacing = new Size(4, 4) };
 
-        layout.AddRow(new Label { Text = "L (Dài - m):" }, _numLength);
-        layout.AddRow(new Label { Text = "B (Rộng - m):" }, _numBeam);
-        layout.AddRow(new Label { Text = "T (Chìm - m):" }, _numDraft);
-        layout.AddRow(new Label { Text = "D (Mạn - m):" }, _numDepth);
+        layout.AddRow(_dims);
         layout.AddRow(_chkShowWaterplane);
         layout.AddRow(btnCalculate);
 
         var resultsLayout = new DynamicLayout { Spacing = new Size(4, 3) };
-        resultsLayout.AddRow(new Label { Text = "V chìm thực:" }, _lblVolume);
-        resultsLayout.AddRow(new Label { Text = "Lượng chiếm nước:" }, _lblDisplacement);
-        resultsLayout.AddRow(new Label { Text = "Diện tích Aw:" }, _lblAw);
-        resultsLayout.AddRow(new Label { Text = "Hệ số béo Cb:" }, _lblCb);
-        resultsLayout.AddRow(new Label { Text = "Cao độ tâm nổi KB:" }, _lblKB);
+        resultsLayout.AddRow(_rowVolume);
+        resultsLayout.AddRow(_rowDisplacement);
+        resultsLayout.AddRow(_rowAw);
+        resultsLayout.AddRow(_rowCb);
+        resultsLayout.AddRow(_rowKB);
 
         layout.AddRow(new GroupBox
         {
@@ -100,6 +100,13 @@ public class LMHullMainPanel : Panel
             Padding = new Padding(6),
             Content = resultsLayout
         });
+
+        var limitsLayout = new DynamicLayout { Spacing = new Size(4, 2) };
+        limitsLayout.AddRow(_limitX);
+        limitsLayout.AddRow(_limitY);
+        limitsLayout.AddRow(_limitZ);
+        limitsLayout.AddRow(btnSaveLimits);
+        layout.AddRow(new GroupBox { Text = "Giới hạn vùng tính", Padding = new Padding(6), Content = limitsLayout });
 
         layout.AddRow(btnGenerateLinesPlan);
         layout.AddRow(new Label { Text = "Sinh mô hình CAD:" });
@@ -122,77 +129,94 @@ public class LMHullMainPanel : Panel
         ComputeRealHydrostatics();
     }
 
+    private static RangeLimitInput CreateLimitInput(string axis, AxisLimit limit) =>
+        new(axis, "m", decimalPlaces: 2, enabled: limit.Enabled) { Range = new Interval(limit.Min, limit.Max) };
+
+    private static AxisLimit ToAxisLimit(RangeLimitInput input) => new()
+    {
+        Enabled = input.IsLimitEnabled,
+        Min = input.Range.Min,
+        Max = input.Range.Max
+    };
+
+    private void SaveLimits()
+    {
+        var settings = ServiceRegistry.Settings;
+        settings.Limits = new CalculationLimits
+        {
+            X = ToAxisLimit(_limitX),
+            Y = ToAxisLimit(_limitY),
+            Z = ToAxisLimit(_limitZ)
+        };
+        ServiceRegistry.SaveSettings(settings);
+
+        string description = settings.Limits.Describe();
+        RhinoApp.WriteLine("[LMHull] " + (description.Length > 0 ? description : "Đã tắt giới hạn vùng tính."));
+    }
+
     private void ToggleConduit()
     {
         _conduit.Enabled = _chkShowWaterplane.Checked ?? false;
         UpdateConduitGeometry();
-        RhinoDoc.ActiveDoc?.Views.Redraw();
+        RhinoCadHandle.ForActiveDoc()?.Redraw();
     }
 
     private void UpdateConduitGeometry()
     {
-        _conduit.WaterZ = _numDraft.Value;
-        _conduit.Length = _numLength.Value;
-        _conduit.Beam = _numBeam.Value;
+        _conduit.WaterZ = _dims.Draft;
+        _conduit.Length = _dims.Length;
+        _conduit.Beam = _dims.Beam;
     }
 
     private void UpdateWaterplaneAndCompute()
     {
         UpdateConduitGeometry();
-        RhinoDoc.ActiveDoc?.Views.Redraw();
+        RhinoCadHandle.ForActiveDoc()?.Redraw();
         ComputeRealHydrostatics();
     }
 
     private void ComputeRealHydrostatics()
     {
-        RhinoDoc doc = RhinoDoc.ActiveDoc;
-        if (doc == null) return;
+        var cad = RhinoCadHandle.ForActiveDoc();
+        if (cad == null) return;
 
-        Brep? targetBrep = null;
-        Guid lastId = LMHullPlugin.Instance.LastHullGuid;
-        if (lastId != Guid.Empty)
-        {
-            var obj = doc.Objects.FindId(lastId);
-            if (obj?.Geometry is Brep b) targetBrep = b;
-        }
+        Brep? targetBrep = cad.GetGeometry<Brep>(LMHullPlugin.Instance.LastHullGuid);
 
         if (targetBrep == null)
         {
-            var fallbackInput = new ShipInput("Temp", _numLength.Value, _numBeam.Value, _numDraft.Value, _numDepth.Value);
+            var fallbackInput = _dims.ToShipInput("Temp");
             targetBrep = BoxBargeBuilder.Build(fallbackInput);
         }
 
-        var hydro = ActualHydrostaticCalculator.Compute(targetBrep, _numDraft.Value, 1.025, doc.ModelAbsoluteTolerance);
+        var hydro = ActualHydrostaticCalculator.Compute(targetBrep, _dims.Draft, ServiceRegistry.Settings.SeaWaterDensity, cad.Tolerance);
         if (hydro != null)
         {
-            _lblVolume.Text = $"{hydro.SubmergedVolume:F1} m³";
-            _lblDisplacement.Text = $"{hydro.Displacement:F1} T";
-            _lblAw.Text = $"{hydro.WaterplaneArea:F1} m²";
-            _lblCb.Text = $"{hydro.BlockCoefficient:F3}";
-            _lblKB.Text = $"{hydro.CenterOfBuoyancy.Z:F2} m";
+            _rowVolume.SetValue(hydro.SubmergedVolume, "F1");
+            _rowDisplacement.SetValue(hydro.Displacement, "F1");
+            _rowAw.SetValue(hydro.WaterplaneArea, "F1");
+            _rowCb.SetValue(hydro.BlockCoefficient, "F3");
+            _rowKB.SetValue(hydro.CenterOfBuoyancy.Z, "F2");
         }
     }
 
     private void GenerateHull(bool isNurbs)
     {
-        RhinoDoc doc = RhinoDoc.ActiveDoc;
-        if (doc == null) return;
+        var cad = RhinoCadHandle.ForActiveDoc();
+        if (cad == null) return;
 
-        var input = new ShipInput("LM-Ship", _numLength.Value, _numBeam.Value, _numDraft.Value, _numDepth.Value);
-        LayerManager.EnsureStandardLayers(doc);
-        int hullLayer = LayerManager.GetOrCreateLayer(doc, LayerManager.HullLayerName, System.Drawing.Color.Red);
+        var input = _dims.ToShipInput("LM-Ship");
+        LayerManager.EnsureStandardLayers(cad);
 
         Brep? brep = isNurbs
-            ? SymmetricHullBuilder.BuildSymmetricSolidHull(input, 7, doc.ModelAbsoluteTolerance)
+            ? SymmetricHullBuilder.BuildSymmetricSolidHull(input, 7, cad.Tolerance)
             : BoxBargeBuilder.Build(input);
 
         if (brep == null) return;
 
-        var attr = new ObjectAttributes { LayerIndex = hullLayer, Name = input.Name };
-        Guid id = doc.Objects.AddBrep(brep, attr);
+        Guid id = cad.AddBrep(brep, LayerManager.Hull.Spec(input.Name));
 
         LMHullPlugin.Instance.LastHullGuid = id;
-        doc.Views.Redraw();
+        cad.Redraw();
         ComputeRealHydrostatics();
     }
 
@@ -201,15 +225,16 @@ public class LMHullMainPanel : Panel
         var sfd = new SaveFileDialog
         {
             Title = "Lưu báo cáo thủy tĩnh CSV",
-            FileName = "BaoCao_ThuyTinh.csv"
+            FileName = "BaoCao_ThuyTinh.csv",
+            Directory = ExportDirectory.Default
         };
         sfd.Filters.Add(new FileFilter("Tệp CSV (*.csv)", ".csv"));
 
         if (sfd.ShowDialog(this) == DialogResult.Ok)
         {
-            var input = new ShipInput("LM-Ship", _numLength.Value, _numBeam.Value, _numDraft.Value, _numDepth.Value);
-            var result = new ShipCalculator().Calculate(input, WaterType.SeaWater);
-            ShipExportService.ExportToCsv(sfd.FileName, input, result);
+            var input = _dims.ToShipInput("LM-Ship");
+            var result = new ShipCalculator(ServiceRegistry.Settings).Calculate(input, WaterType.SeaWater);
+            ServiceRegistry.Exporter.ExportShip(input, result, sfd.FileName, ExportFormat.Csv);
             MessageBox.Show($"Đã xuất file CSV thành công tại:\n{sfd.FileName}", "LMHull Export", MessageBoxType.Information);
         }
     }
@@ -219,15 +244,16 @@ public class LMHullMainPanel : Panel
         var sfd = new SaveFileDialog
         {
             Title = "Lưu dữ liệu cấu trúc JSON",
-            FileName = "DuLieu_Tau.json"
+            FileName = "DuLieu_Tau.json",
+            Directory = ExportDirectory.Default
         };
         sfd.Filters.Add(new FileFilter("Tệp JSON (*.json)", ".json"));
 
         if (sfd.ShowDialog(this) == DialogResult.Ok)
         {
-            var input = new ShipInput("LM-Ship", _numLength.Value, _numBeam.Value, _numDraft.Value, _numDepth.Value);
-            var result = new ShipCalculator().Calculate(input, WaterType.SeaWater);
-            ShipExportService.ExportToJson(sfd.FileName, input, result);
+            var input = _dims.ToShipInput("LM-Ship");
+            var result = new ShipCalculator(ServiceRegistry.Settings).Calculate(input, WaterType.SeaWater);
+            ServiceRegistry.Exporter.ExportShip(input, result, sfd.FileName, ExportFormat.Json);
             MessageBox.Show($"Đã xuất file JSON thành công tại:\n{sfd.FileName}", "LMHull Export", MessageBoxType.Information);
         }
     }

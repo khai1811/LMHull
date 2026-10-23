@@ -1,6 +1,9 @@
 using LMHull.Core.Enums;
 using LMHull.Core.Models;
+using LMHull.Core.Reporting;
 using LMHull.Core.Services;
+using LMHull.Rhino.Features.Reports.Services;
+using LMHull.Rhino.Infrastructure;
 using Rhino;
 using Rhino.Commands;
 
@@ -17,17 +20,19 @@ public class LMShipInfoCommand : Command
         var defaultBarge = new ShipInput("Sà lan mẫu v0.3", length: 45.0, beam: 10.0, draft: 2.5, depth: 3.5);
 
         // 2. Gọi bộ tính toán ShipCalculator từ LMHull.Core.dll
-        var calculator = new ShipCalculator();
+        var calculator = new ShipCalculator(ServiceRegistry.Settings);
         ShipResult result = calculator.Calculate(defaultBarge, WaterType.SeaWater);
 
-        // 3. In kết quả ra thanh Command History của Rhino bằng RhinoApp.WriteLine
-        RhinoApp.WriteLine("==================================================");
-        RhinoApp.WriteLine($" [LMHull.Rhino v0.3] THÔNG SỐ: {result.Input.Name}");
-        RhinoApp.WriteLine($" - Kích thước : L = {defaultBarge.Length}m | B = {defaultBarge.Beam}m | T = {defaultBarge.Draft}m");
-        RhinoApp.WriteLine($" - Tỷ số      : L/B = {result.LBRatio:F2} | B/T = {result.BTRatio:F2}");
-        RhinoApp.WriteLine($" - Thể tích V : {result.BoxVolume:F2} m3");
-        RhinoApp.WriteLine($" - Lượng ch.n : {result.Displacement:F2} Tấn (Nước biển)");
-        RhinoApp.WriteLine("==================================================");
+        // 3. Xuất kết quả vào bảng "LMHull Results"
+        var table = ResultTable.KeyValue($"Thông số: {result.Input.Name}", "ShipInfo")
+            .AddRow("Chiều dài L", defaultBarge.Length, "F2", "m")
+            .AddRow("Chiều rộng B", defaultBarge.Beam, "F2", "m")
+            .AddRow("Chiều chìm T", defaultBarge.Draft, "F2", "m")
+            .AddRow("Tỷ số L/B", result.LBRatio, "F2")
+            .AddRow("Tỷ số B/T", result.BTRatio, "F2")
+            .AddRow("Thể tích V", result.BoxVolume, "F2", "m³")
+            .AddRow("Lượng chiếm nước Δ (nước biển)", result.Displacement, "F2", "t");
+        ResultsHub.Publish(table);
 
         return Result.Success;
     }
